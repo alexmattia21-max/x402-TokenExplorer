@@ -98,7 +98,7 @@ export default function TokenCard({
             </div>
           </div>
 
-          {supply && (
+          {supply && supply !== "undefined" && (
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs text-muted-foreground">Supply</span>
               <span className="text-xs font-medium text-foreground" data-testid={`text-supply-${mintAddress}`}>
