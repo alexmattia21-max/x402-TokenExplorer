@@ -1,13 +1,23 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { storage } from "./storage";
+import { SolanaTokenScanner } from "./solana-scanner";
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // put application routes here
-  // prefix all routes with /api
+  const scanner = new SolanaTokenScanner();
 
-  // use storage to perform CRUD operations on the storage interface
-  // e.g. storage.insertUser(user) or storage.getUserByUsername(username)
+  app.get("/api/tokens", async (req, res) => {
+    try {
+      console.log('Fetching 402/x402 tokens...');
+      const tokens = await scanner.scanFor402Tokens();
+      res.json(tokens);
+    } catch (error) {
+      console.error('Error fetching tokens:', error);
+      res.status(500).json({ 
+        error: 'Failed to fetch tokens',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
 
   const httpServer = createServer(app);
 
