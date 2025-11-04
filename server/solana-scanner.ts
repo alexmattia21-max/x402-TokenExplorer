@@ -349,8 +349,8 @@ export class SolanaTokenScanner {
       mintAddress: jupToken.address,
       decimals: jupToken.decimals,
       socials: Object.keys(socials).length > 0 ? socials : undefined,
-      marketCap: undefined,      // Jupiter doesn't provide market cap
-      createdAt: undefined,       // Jupiter doesn't provide creation time
+      marketCap: undefined,
+      createdAt: undefined,
     };
   }
 
@@ -361,8 +361,8 @@ export class SolanaTokenScanner {
       mintAddress: pair.baseToken.address,
       decimals: 9,
       socials: undefined,
-      marketCap: pair.marketCap,           // DexScreener provides market cap
-      createdAt: pair.pairCreatedAt,       // DexScreener provides creation timestamp
+      marketCap: pair.marketCap,
+      createdAt: pair.pairCreatedAt,
     };
   }
 
@@ -373,8 +373,8 @@ export class SolanaTokenScanner {
       mintAddress: token.address,
       decimals: token.decimals || 9,
       socials: undefined,
-      marketCap: token.mc,                 // Birdeye provides market cap
-      createdAt: undefined,                 // Birdeye doesn't provide creation time
+      marketCap: token.mc,
+      createdAt: undefined,
     };
   }
 
@@ -403,7 +403,7 @@ export class SolanaTokenScanner {
         mintAddress: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
         decimals: 9,
         marketCap: 125000,
-        createdAt: Date.now() - 7 * 24 * 60 * 60 * 1000, // 7 days ago
+        createdAt: Date.now() - 7 * 24 * 60 * 60 * 1000,
         socials: {
           twitter: "https://twitter.com/402protocol",
           telegram: "https://t.me/402protocol",
@@ -416,7 +416,7 @@ export class SolanaTokenScanner {
         mintAddress: "8yKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsV",
         decimals: 6,
         marketCap: 50000,
-        createdAt: Date.now() - 2 * 24 * 60 * 60 * 1000, // 2 days ago
+        createdAt: Date.now() - 2 * 24 * 60 * 60 * 1000,
         socials: {
           twitter: "https://twitter.com/x402finance",
           discord: "https://discord.gg/x402"
@@ -428,7 +428,7 @@ export class SolanaTokenScanner {
         mintAddress: "9zKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsW",
         decimals: 9,
         marketCap: 8500,
-        createdAt: Date.now() - 30 * 24 * 60 * 60 * 1000, // 30 days ago
+        createdAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
         socials: {
           discord: "https://discord.gg/dao402",
           website: "https://dao402.org"
@@ -440,7 +440,7 @@ export class SolanaTokenScanner {
         mintAddress: "AaKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsX",
         decimals: 9,
         marketCap: 250000,
-        createdAt: Date.now() - 60 * 60 * 1000, // 1 hour ago
+        createdAt: Date.now() - 60 * 60 * 1000,
         socials: {
           twitter: "https://twitter.com/super402",
           telegram: "https://t.me/super402",
@@ -454,14 +454,14 @@ export class SolanaTokenScanner {
         mintAddress: "BbKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsY",
         decimals: 6,
         marketCap: 3200,
-        createdAt: Date.now() - 15 * 60 * 1000, // 15 minutes ago
+        createdAt: Date.now() - 15 * 60 * 1000,
       },
       {
         name: "x402 Network",
         symbol: "x402NET",
         mintAddress: "CcKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsZ",
         decimals: 9,
-        createdAt: Date.now() - 90 * 24 * 60 * 60 * 1000, // 90 days ago
+        createdAt: Date.now() - 90 * 24 * 60 * 60 * 1000,
         socials: {
           website: "https://x402network.com"
         }
