@@ -38,6 +38,7 @@ interface DexScreenerPair {
   marketCap?: number;
   volume?: { h24: number };
   dexId?: string;
+  pairCreatedAt?: number;
 }
 
 interface BirdeyeToken {
@@ -76,38 +77,53 @@ export class SolanaTokenScanner {
         this.fetchFromBirdeye(),
       ]);
 
-      // Merge all results
+      // Merge all results - prioritize sources with more data
       const allTokensMap = new Map<string, Token>();
 
-      // Process Jupiter tokens (best metadata quality)
-      if (jupiterTokens.status === 'fulfilled') {
-        jupiterTokens.value.forEach(token => {
-          allTokensMap.set(token.mintAddress.toLowerCase(), token);
-        });
-        console.log(`✓ Jupiter: ${jupiterTokens.value.length} tokens`);
-      } else {
-        console.error('✗ Jupiter failed:', jupiterTokens.reason?.message || 'Unknown error');
-      }
-
-      // Process DexScreener tokens (best for low mcap & new tokens)
+      // Process DexScreener tokens FIRST (has market cap + creation time)
       if (dexScreenerTokens.status === 'fulfilled') {
         dexScreenerTokens.value.forEach(token => {
-          const key = token.mintAddress.toLowerCase();
-          if (!allTokensMap.has(key)) {
-            allTokensMap.set(key, token);
-          }
+          allTokensMap.set(token.mintAddress.toLowerCase(), token);
         });
         console.log(`✓ DexScreener: ${dexScreenerTokens.value.length} tokens`);
       } else {
         console.error('✗ DexScreener failed:', dexScreenerTokens.reason?.message || 'Unknown error');
       }
 
-      // Process Birdeye tokens (additional coverage)
+      // Process Jupiter tokens (merge social data into existing tokens)
+      if (jupiterTokens.status === 'fulfilled') {
+        jupiterTokens.value.forEach(token => {
+          const key = token.mintAddress.toLowerCase();
+          const existing = allTokensMap.get(key);
+          
+          if (existing) {
+            // Merge: keep DexScreener's market cap/createdAt, add Jupiter's socials
+            allTokensMap.set(key, {
+              ...existing,
+              socials: token.socials || existing.socials,
+            });
+          } else {
+            // New token from Jupiter only
+            allTokensMap.set(key, token);
+          }
+        });
+        console.log(`✓ Jupiter: ${jupiterTokens.value.length} tokens`);
+      } else {
+        console.error('✗ Jupiter failed:', jupiterTokens.reason?.message || 'Unknown error');
+      }
+
+      // Process Birdeye tokens (additional coverage with market cap)
       if (birdeyeTokens.status === 'fulfilled') {
         birdeyeTokens.value.forEach(token => {
           const key = token.mintAddress.toLowerCase();
-          if (!allTokensMap.has(key)) {
+          const existing = allTokensMap.get(key);
+          
+          if (!existing) {
+            // Only add if not already found
             allTokensMap.set(key, token);
+          } else if (!existing.marketCap && token.marketCap) {
+            // If existing token doesn't have market cap, add it from Birdeye
+            existing.marketCap = token.marketCap;
           }
         });
         console.log(`✓ Birdeye: ${birdeyeTokens.value.length} tokens`);
@@ -333,6 +349,8 @@ export class SolanaTokenScanner {
       mintAddress: jupToken.address,
       decimals: jupToken.decimals,
       socials: Object.keys(socials).length > 0 ? socials : undefined,
+      marketCap: undefined,      // Jupiter doesn't provide market cap
+      createdAt: undefined,       // Jupiter doesn't provide creation time
     };
   }
 
@@ -343,6 +361,8 @@ export class SolanaTokenScanner {
       mintAddress: pair.baseToken.address,
       decimals: 9,
       socials: undefined,
+      marketCap: pair.marketCap,           // DexScreener provides market cap
+      createdAt: pair.pairCreatedAt,       // DexScreener provides creation timestamp
     };
   }
 
@@ -353,6 +373,8 @@ export class SolanaTokenScanner {
       mintAddress: token.address,
       decimals: token.decimals || 9,
       socials: undefined,
+      marketCap: token.mc,                 // Birdeye provides market cap
+      createdAt: undefined,                 // Birdeye doesn't provide creation time
     };
   }
 
@@ -380,6 +402,8 @@ export class SolanaTokenScanner {
         symbol: "402X",
         mintAddress: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
         decimals: 9,
+        marketCap: 125000,
+        createdAt: Date.now() - 7 * 24 * 60 * 60 * 1000, // 7 days ago
         socials: {
           twitter: "https://twitter.com/402protocol",
           telegram: "https://t.me/402protocol",
@@ -391,6 +415,8 @@ export class SolanaTokenScanner {
         symbol: "X402",
         mintAddress: "8yKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsV",
         decimals: 6,
+        marketCap: 50000,
+        createdAt: Date.now() - 2 * 24 * 60 * 60 * 1000, // 2 days ago
         socials: {
           twitter: "https://twitter.com/x402finance",
           discord: "https://discord.gg/x402"
@@ -401,6 +427,8 @@ export class SolanaTokenScanner {
         symbol: "DAO402",
         mintAddress: "9zKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsW",
         decimals: 9,
+        marketCap: 8500,
+        createdAt: Date.now() - 30 * 24 * 60 * 60 * 1000, // 30 days ago
         socials: {
           discord: "https://discord.gg/dao402",
           website: "https://dao402.org"
@@ -411,6 +439,8 @@ export class SolanaTokenScanner {
         symbol: "S402",
         mintAddress: "AaKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsX",
         decimals: 9,
+        marketCap: 250000,
+        createdAt: Date.now() - 60 * 60 * 1000, // 1 hour ago
         socials: {
           twitter: "https://twitter.com/super402",
           telegram: "https://t.me/super402",
@@ -423,12 +453,15 @@ export class SolanaTokenScanner {
         symbol: "MEME402",
         mintAddress: "BbKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsY",
         decimals: 6,
+        marketCap: 3200,
+        createdAt: Date.now() - 15 * 60 * 1000, // 15 minutes ago
       },
       {
         name: "x402 Network",
         symbol: "x402NET",
         mintAddress: "CcKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsZ",
         decimals: 9,
+        createdAt: Date.now() - 90 * 24 * 60 * 60 * 1000, // 90 days ago
         socials: {
           website: "https://x402network.com"
         }
