@@ -1,8 +1,22 @@
 import { fetch } from 'undici';
 import type { Token } from '@shared/schema';
 
+const JUPITER_TOKEN_API = 'https://tokens.jup.ag/tokens';
 const DEXSCREENER_SEARCH_API = 'https://api.dexscreener.com/latest/dex/search';
 const SEARCH_TERMS = ['402', 'x402', '402x'];
+
+interface JupiterToken {
+  address: string;
+  name: string;
+  symbol: string;
+  decimals: number;
+  extensions?: {
+    discord?: string;
+    twitter?: string;
+    telegram?: string;
+    website?: string;
+  };
+}
 
 interface DexScreenerPair {
   chainId: string;
@@ -45,10 +59,48 @@ export class SolanaTokenScanner {
     try {
       console.log('=== Starting token scan ===');
       
-      // Only fetch from DexScreener for now (stable and working)
-      const tokens = await this.fetchFromDexScreener();
-      
-      this.tokensCache = tokens;
+      // Fetch from both sources (Jupiter optional, DexScreener required)
+      const [jupiterResult, dexScreenerResult] = await Promise.allSettled([
+        this.fetchFromJupiter(),
+        this.fetchFromDexScreener(),
+      ]);
+
+      // Start with DexScreener (primary source - has socials!)
+      const tokensMap = new Map<string, Token>();
+
+      if (dexScreenerResult.status === 'fulfilled') {
+        dexScreenerResult.value.forEach(token => {
+          tokensMap.set(token.mintAddress.toLowerCase(), token);
+        });
+        console.log(`✓ DexScreener: ${dexScreenerResult.value.length} tokens (PRIMARY)`);
+      } else {
+        console.error('✗ DexScreener failed:', dexScreenerResult.reason?.message);
+        return this.tokensCache.length > 0 ? this.tokensCache : [];
+      }
+
+      // Enhance with Jupiter social links if available (usually won't work on Render)
+      if (jupiterResult.status === 'fulfilled') {
+        let enhancedCount = 0;
+        jupiterResult.value.forEach(token => {
+          const key = token.mintAddress.toLowerCase();
+          const existing = tokensMap.get(key);
+          
+          if (existing) {
+            // Merge socials: prefer Jupiter's if available, keep DexScreener's as fallback
+            existing.socials = {
+              ...existing.socials,
+              ...token.socials,
+            };
+            existing.decimals = token.decimals;
+            enhancedCount++;
+          }
+        });
+        console.log(`✓ Jupiter: Enhanced ${enhancedCount} tokens with additional social links`);
+      } else {
+        console.warn('⚠ Jupiter unavailable - using DexScreener social links only');
+      }
+
+      this.tokensCache = Array.from(tokensMap.values());
       this.lastFetchTime = now;
 
       console.log(`=== Total tokens: ${this.tokensCache.length} ===`);
@@ -63,6 +115,37 @@ export class SolanaTokenScanner {
       }
 
       return [];
+    }
+  }
+
+  private async fetchFromJupiter(): Promise<Token[]> {
+    try {
+      console.log('Fetching from Jupiter API (for social links)...');
+      
+      const response = await fetch(JUPITER_TOKEN_API, {
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0',
+        },
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const allTokens: JupiterToken[] = await response.json();
+      console.log(`  → Fetched ${allTokens.length} total tokens`);
+
+      const filtered = allTokens.filter(token =>
+        this.contains402(token.name) || this.contains402(token.symbol)
+      );
+
+      return filtered.map(token => this.transformJupiterToken(token));
+
+    } catch (error) {
+      console.error('Jupiter API error (optional):', error instanceof Error ? error.message : 'Unknown');
+      throw error;
     }
   }
 
@@ -142,13 +225,41 @@ export class SolanaTokenScanner {
            lowerText.includes('402x');
   }
 
+  private transformJupiterToken(jupToken: JupiterToken): Token {
+    const socials: Token['socials'] = {};
+
+    if (jupToken.extensions) {
+      if (jupToken.extensions.twitter) {
+        socials.twitter = this.normalizeUrl(jupToken.extensions.twitter);
+      }
+      if (jupToken.extensions.telegram) {
+        socials.telegram = this.normalizeUrl(jupToken.extensions.telegram);
+      }
+      if (jupToken.extensions.discord) {
+        socials.discord = this.normalizeUrl(jupToken.extensions.discord);
+      }
+      if (jupToken.extensions.website) {
+        socials.website = this.normalizeUrl(jupToken.extensions.website);
+      }
+    }
+
+    return {
+      name: jupToken.name,
+      symbol: jupToken.symbol,
+      mintAddress: jupToken.address,
+      decimals: jupToken.decimals,
+      socials: Object.keys(socials).length > 0 ? socials : undefined,
+    };
+  }
+
   private transformDexScreenerToken(pair: DexScreenerPair): Token {
+    // Extract social links from DexScreener data
     const socials: Token['socials'] = {};
 
     if (pair.info?.socials) {
       pair.info.socials.forEach(social => {
         const type = social.type.toLowerCase();
-        if (type === 'twitter' || type === 'x') {
+        if (type === 'twitter') {
           socials.twitter = social.url;
         } else if (type === 'telegram') {
           socials.telegram = social.url;
