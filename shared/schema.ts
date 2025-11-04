@@ -12,8 +12,6 @@ export const tokenSchema = z.object({
     discord: z.string().optional(),
     website: z.string().optional(),
   }).optional(),
-  marketCap: z.number().optional(),
-  createdAt: z.number().optional(),
 });
 
 export type Token = z.infer<typeof tokenSchema>;
