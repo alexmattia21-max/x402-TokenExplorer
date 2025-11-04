@@ -1,22 +1,9 @@
 import { fetch } from 'undici';
 import type { Token } from '@shared/schema';
 
-const JUPITER_TOKEN_API = 'https://tokens.jup.ag/tokens';
 const DEXSCREENER_SEARCH_API = 'https://api.dexscreener.com/latest/dex/search';
-const SEARCH_TERMS = ['402', 'x402', '402x']; // Two terms with delay between them
-
-interface JupiterToken {
-  address: string;
-  name: string;
-  symbol: string;
-  decimals: number;
-  extensions?: {
-    discord?: string;
-    twitter?: string;
-    telegram?: string;
-    website?: string;
-  };
-}
+const PUMPPORTAL_TOKENS_API = 'https://pumpportal.fun/api/data/tokens';
+const SEARCH_TERMS = ['402', 'x402', '402x'];
 
 interface DexScreenerPair {
   chainId: string;
@@ -32,6 +19,28 @@ interface DexScreenerPair {
   volume?: { h24: number };
   dexId?: string;
   pairCreatedAt?: number;
+  info?: {
+    socials?: Array<{
+      type: string;
+      url: string;
+    }>;
+    websites?: Array<{
+      url: string;
+    }>;
+  };
+}
+
+interface PumpFunToken {
+  mint: string;
+  name: string;
+  symbol: string;
+  description?: string;
+  image?: string;
+  twitter?: string;
+  telegram?: string;
+  website?: string;
+  creator?: string;
+  marketCap?: number;
 }
 
 export class SolanaTokenScanner {
@@ -50,42 +59,46 @@ export class SolanaTokenScanner {
     try {
       console.log('=== Starting token scan ===');
       
-      // Fetch from both sources (Jupiter optional, DexScreener required)
-      const [jupiterResult, dexScreenerResult] = await Promise.allSettled([
-        this.fetchFromJupiter(),
+      // Fetch from all sources in parallel
+      const [dexScreenerResult, pumpFunResult] = await Promise.allSettled([
         this.fetchFromDexScreener(),
+        this.fetchFromPumpFun(),
       ]);
 
-      // Start with DexScreener (primary source)
       const tokensMap = new Map<string, Token>();
 
+      // Process DexScreener tokens (primary)
       if (dexScreenerResult.status === 'fulfilled') {
         dexScreenerResult.value.forEach(token => {
           tokensMap.set(token.mintAddress.toLowerCase(), token);
         });
-        console.log(`✓ DexScreener: ${dexScreenerResult.value.length} tokens (PRIMARY)`);
+        console.log(`✓ DexScreener: ${dexScreenerResult.value.length} tokens`);
       } else {
         console.error('✗ DexScreener failed:', dexScreenerResult.reason?.message);
-        // If DexScreener fails, we have no tokens
-        return this.tokensCache.length > 0 ? this.tokensCache : [];
       }
 
-      // Enhance with Jupiter social links if available
-      if (jupiterResult.status === 'fulfilled') {
+      // Enhance with Pump.fun social links
+      if (pumpFunResult.status === 'fulfilled') {
         let enhancedCount = 0;
-        jupiterResult.value.forEach(token => {
+        pumpFunResult.value.forEach(token => {
           const key = token.mintAddress.toLowerCase();
           const existing = tokensMap.get(key);
           
           if (existing && token.socials) {
-            existing.socials = token.socials;
-            existing.decimals = token.decimals; // Jupiter has accurate decimals
+            // Merge socials
+            existing.socials = {
+              ...existing.socials,
+              ...token.socials,
+            };
             enhancedCount++;
+          } else if (!existing) {
+            // New token from Pump.fun
+            tokensMap.set(key, token);
           }
         });
-        console.log(`✓ Jupiter: Enhanced ${enhancedCount} tokens with social links`);
+        console.log(`✓ Pump.fun: ${pumpFunResult.value.length} tokens (enhanced ${enhancedCount} with social links)`);
       } else {
-        console.warn('⚠ Jupiter unavailable (network blocked) - tokens will show without social links');
+        console.warn('⚠ Pump.fun unavailable');
       }
 
       this.tokensCache = Array.from(tokensMap.values());
@@ -106,44 +119,12 @@ export class SolanaTokenScanner {
     }
   }
 
-  private async fetchFromJupiter(): Promise<Token[]> {
-    try {
-      console.log('Fetching from Jupiter API (for social links)...');
-      
-      const response = await fetch(JUPITER_TOKEN_API, {
-        headers: {
-          'Accept': 'application/json',
-          'User-Agent': 'Mozilla/5.0',
-        },
-        signal: AbortSignal.timeout(15000),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const allTokens: JupiterToken[] = await response.json();
-      console.log(`  → Fetched ${allTokens.length} total tokens`);
-
-      const filtered = allTokens.filter(token =>
-        this.contains402(token.name) || this.contains402(token.symbol)
-      );
-
-      return filtered.map(token => this.transformJupiterToken(token));
-
-    } catch (error) {
-      console.error('Jupiter API error (optional):', error instanceof Error ? error.message : 'Unknown');
-      throw error;
-    }
-  }
-
   private async fetchFromDexScreener(): Promise<Token[]> {
     try {
       console.log('Fetching from DexScreener API...');
       
       const allPairs: DexScreenerPair[] = [];
       
-      // Search multiple terms with delay between each
       for (let i = 0; i < SEARCH_TERMS.length; i++) {
         const term = SEARCH_TERMS[i];
         
@@ -169,9 +150,8 @@ export class SolanaTokenScanner {
             console.warn(`  → "${term}": HTTP ${response.status}`);
           }
 
-          // Delay between searches to avoid rate limiting (skip delay on last term)
           if (i < SEARCH_TERMS.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 1500)); // 1.5 second delay
+            await new Promise(resolve => setTimeout(resolve, 1500));
           }
 
         } catch (err) {
@@ -179,16 +159,12 @@ export class SolanaTokenScanner {
         }
       }
 
-      console.log(`  → Total pairs fetched: ${allPairs.length}`);
-
-      // Filter for Solana and matching tokens
       const solanaPairs = allPairs.filter(pair => 
         pair.chainId === 'solana' &&
         pair.baseToken &&
         (this.contains402(pair.baseToken.name) || this.contains402(pair.baseToken.symbol))
       );
 
-      // Deduplicate by token address
       const tokenMap = new Map<string, DexScreenerPair>();
       solanaPairs.forEach(pair => {
         const key = pair.baseToken.address.toLowerCase();
@@ -209,6 +185,42 @@ export class SolanaTokenScanner {
     }
   }
 
+  private async fetchFromPumpFun(): Promise<Token[]> {
+    try {
+      console.log('Fetching from Pump.fun API...');
+      
+      // PumpPortal provides a list of all recent tokens
+      // We'll filter for 402 tokens
+      const response = await fetch(PUMPPORTAL_TOKENS_API, {
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0',
+        },
+        signal: AbortSignal.timeout(15000),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      const allTokens: PumpFunToken[] = Array.isArray(data) ? data : [];
+      
+      console.log(`  → Fetched ${allTokens.length} tokens from Pump.fun`);
+
+      // Filter for 402 tokens
+      const filtered = allTokens.filter(token =>
+        this.contains402(token.name) || this.contains402(token.symbol)
+      );
+
+      return filtered.map(token => this.transformPumpFunToken(token));
+
+    } catch (error) {
+      console.error('Pump.fun API error:', error instanceof Error ? error.message : 'Unknown');
+      throw error;
+    }
+  }
+
   private contains402(text: string): boolean {
     if (!text) return false;
     const lowerText = text.toLowerCase();
@@ -217,40 +229,54 @@ export class SolanaTokenScanner {
            lowerText.includes('402x');
   }
 
-  private transformJupiterToken(jupToken: JupiterToken): Token {
+  private transformDexScreenerToken(pair: DexScreenerPair): Token {
     const socials: Token['socials'] = {};
 
-    if (jupToken.extensions) {
-      if (jupToken.extensions.twitter) {
-        socials.twitter = this.normalizeUrl(jupToken.extensions.twitter);
-      }
-      if (jupToken.extensions.telegram) {
-        socials.telegram = this.normalizeUrl(jupToken.extensions.telegram);
-      }
-      if (jupToken.extensions.discord) {
-        socials.discord = this.normalizeUrl(jupToken.extensions.discord);
-      }
-      if (jupToken.extensions.website) {
-        socials.website = this.normalizeUrl(jupToken.extensions.website);
-      }
+    if (pair.info?.socials) {
+      pair.info.socials.forEach(social => {
+        const type = social.type.toLowerCase();
+        if (type === 'twitter') {
+          socials.twitter = social.url;
+        } else if (type === 'telegram') {
+          socials.telegram = social.url;
+        } else if (type === 'discord') {
+          socials.discord = social.url;
+        }
+      });
     }
 
-    return {
-      name: jupToken.name,
-      symbol: jupToken.symbol,
-      mintAddress: jupToken.address,
-      decimals: jupToken.decimals,
-      socials: Object.keys(socials).length > 0 ? socials : undefined,
-    };
-  }
+    if (pair.info?.websites && pair.info.websites.length > 0) {
+      socials.website = pair.info.websites[0].url;
+    }
 
-  private transformDexScreenerToken(pair: DexScreenerPair): Token {
     return {
       name: pair.baseToken.name,
       symbol: pair.baseToken.symbol,
       mintAddress: pair.baseToken.address,
       decimals: 9,
-      socials: undefined,
+      socials: Object.keys(socials).length > 0 ? socials : undefined,
+    };
+  }
+
+  private transformPumpFunToken(token: PumpFunToken): Token {
+    const socials: Token['socials'] = {};
+
+    if (token.twitter) {
+      socials.twitter = this.normalizeUrl(token.twitter);
+    }
+    if (token.telegram) {
+      socials.telegram = this.normalizeUrl(token.telegram);
+    }
+    if (token.website) {
+      socials.website = this.normalizeUrl(token.website);
+    }
+
+    return {
+      name: token.name,
+      symbol: token.symbol,
+      mintAddress: token.mint,
+      decimals: 9,
+      socials: Object.keys(socials).length > 0 ? socials : undefined,
     };
   }
 
