@@ -1,4 +1,4 @@
-import { ExternalLink, Twitter, MessageCircle, Globe, Copy, Check, TrendingUp, Calendar } from "lucide-react";
+import { ExternalLink, Twitter, MessageCircle, Globe, Copy, Check } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -11,8 +11,6 @@ interface TokenCardProps {
   mintAddress: string;
   supply?: string;
   decimals?: number;
-  marketCap?: number;
-  createdAt?: number;
   socials?: {
     twitter?: string;
     telegram?: string;
@@ -27,8 +25,6 @@ export default function TokenCard({
   mintAddress,
   supply,
   decimals,
-  marketCap,
-  createdAt,
   socials,
 }: TokenCardProps) {
   const [copied, setCopied] = useState(false);
@@ -41,58 +37,6 @@ export default function TokenCard({
 
   const truncateAddress = (address: string) => {
     return `${address.slice(0, 4)}...${address.slice(-4)}`;
-  };
-
-  const formatMarketCap = (marketCap?: number): string => {
-    if (!marketCap || marketCap === 0) return 'N/A';
-    
-    if (marketCap >= 1_000_000_000) {
-      return `$${(marketCap / 1_000_000_000).toFixed(2)}B`;
-    } else if (marketCap >= 1_000_000) {
-      return `$${(marketCap / 1_000_000).toFixed(2)}M`;
-    } else if (marketCap >= 1_000) {
-      return `$${(marketCap / 1_000).toFixed(2)}K`;
-    } else {
-      return `$${marketCap.toFixed(2)}`;
-    }
-  };
-
-  const formatCreatedAt = (timestamp?: number): string => {
-    if (!timestamp) return 'N/A';
-    
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffInMs = now.getTime() - date.getTime();
-    const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
-    
-    if (diffInDays === 0) {
-      const diffInHours = Math.floor(diffInMs / (1000 * 60 * 60));
-      if (diffInHours === 0) {
-        const diffInMinutes = Math.floor(diffInMs / (1000 * 60));
-        return diffInMinutes <= 1 ? 'Just now' : `${diffInMinutes}m ago`;
-      }
-      return diffInHours === 1 ? '1h ago' : `${diffInHours}h ago`;
-    } else if (diffInDays === 1) {
-      return 'Yesterday';
-    } else if (diffInDays < 7) {
-      return `${diffInDays}d ago`;
-    } else if (diffInDays < 30) {
-      const weeks = Math.floor(diffInDays / 7);
-      return weeks === 1 ? '1w ago' : `${weeks}w ago`;
-    } else if (diffInDays < 365) {
-      const months = Math.floor(diffInDays / 30);
-      return months === 1 ? '1mo ago' : `${months}mo ago`;
-    } else {
-      return date.toLocaleDateString();
-    }
-  };
-
-  const getMarketCapColor = (marketCap?: number): string => {
-    if (!marketCap || marketCap === 0) return 'text-muted-foreground';
-    if (marketCap < 10_000) return 'text-red-500';
-    if (marketCap < 100_000) return 'text-orange-500';
-    if (marketCap < 1_000_000) return 'text-yellow-500';
-    return 'text-green-500';
   };
 
   const dexscreenerUrl = `https://dexscreener.com/solana/${mintAddress}`;
@@ -152,34 +96,6 @@ export default function TokenCard({
                 )}
               </Button>
             </div>
-          </div>
-
-          {/* Market Cap */}
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <TrendingUp className="h-3 w-3" />
-              Market Cap
-            </span>
-            <span 
-              className={`text-xs font-semibold ${getMarketCapColor(marketCap)}`}
-              data-testid={`text-market-cap-${mintAddress}`}
-            >
-              {formatMarketCap(marketCap)}
-            </span>
-          </div>
-
-          {/* Created At */}
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <Calendar className="h-3 w-3" />
-              Created
-            </span>
-            <span 
-              className="text-xs font-medium text-foreground"
-              data-testid={`text-created-at-${mintAddress}`}
-            >
-              {formatCreatedAt(createdAt)}
-            </span>
           </div>
 
           {supply && supply !== "undefined" && (
