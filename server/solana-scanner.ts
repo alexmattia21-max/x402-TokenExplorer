@@ -5,22 +5,9 @@ import type { Token } from '@shared/schema';
 const JUPITER_TOKEN_API = 'https://tokens.jup.ag/tokens';
 const DEXSCREENER_SEARCH_API = 'https://api.dexscreener.com/latest/dex/search';
 const BIRDEYE_TOKEN_LIST_API = 'https://public-api.birdeye.so/defi/tokenlist';
-const SOLSCAN_TOKEN_SEARCH_API = 'https://api.solscan.io/token/search';
 
-// Expanded search terms to catch all variations
-const SEARCH_TERMS = [
-  '402',
-  'x402',
-  '402x',
-  '402 ',
-  ' 402',
-  '_402',
-  '402_',
-  '-402',
-  '402-',
-  '.402',
-  '402.',
-];
+// Reduced search terms to avoid rate limiting (prioritize most common patterns)
+const SEARCH_TERMS = ['402', 'x402', '402x'];
 
 interface JupiterToken {
   address: string;
@@ -82,7 +69,7 @@ export class SolanaTokenScanner {
     try {
       console.log('=== Starting comprehensive token scan ===');
       
-      // Fetch from all sources in parallel
+      // Fetch from all sources in parallel with timeout protection
       const [jupiterTokens, dexScreenerTokens, birdeyeTokens] = await Promise.allSettled([
         this.fetchFromJupiter(),
         this.fetchFromDexScreener(),
@@ -99,7 +86,7 @@ export class SolanaTokenScanner {
         });
         console.log(`✓ Jupiter: ${jupiterTokens.value.length} tokens`);
       } else {
-        console.error('✗ Jupiter failed:', jupiterTokens.reason);
+        console.error('✗ Jupiter failed:', jupiterTokens.reason?.message || 'Unknown error');
       }
 
       // Process DexScreener tokens (best for low mcap & new tokens)
@@ -112,7 +99,7 @@ export class SolanaTokenScanner {
         });
         console.log(`✓ DexScreener: ${dexScreenerTokens.value.length} tokens`);
       } else {
-        console.error('✗ DexScreener failed:', dexScreenerTokens.reason);
+        console.error('✗ DexScreener failed:', dexScreenerTokens.reason?.message || 'Unknown error');
       }
 
       // Process Birdeye tokens (additional coverage)
@@ -125,7 +112,7 @@ export class SolanaTokenScanner {
         });
         console.log(`✓ Birdeye: ${birdeyeTokens.value.length} tokens`);
       } else {
-        console.error('✗ Birdeye failed:', birdeyeTokens.reason);
+        console.error('✗ Birdeye failed:', birdeyeTokens.reason?.message || 'Unknown error');
       }
 
       this.tokensCache = Array.from(allTokensMap.values());
@@ -150,17 +137,32 @@ export class SolanaTokenScanner {
   }
 
   /**
-   * Fetch from Jupiter Token API
-   * Best for: Verified tokens with complete metadata and social links
+   * Fetch from Jupiter Token API with alternative endpoint fallback
    */
   private async fetchFromJupiter(): Promise<Token[]> {
     try {
       console.log('Fetching from Jupiter API...');
-      const response = await fetch(JUPITER_TOKEN_API, {
+      
+      // Try main endpoint first
+      let response = await fetch(JUPITER_TOKEN_API, {
         headers: {
           'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0',
         },
+        signal: AbortSignal.timeout(10000), // 10 second timeout
       });
+
+      // If main endpoint fails, try alternative CDN endpoint
+      if (!response.ok) {
+        console.log('  → Main endpoint failed, trying CDN...');
+        response = await fetch('https://cache.jup.ag/tokens', {
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0',
+          },
+          signal: AbortSignal.timeout(10000),
+        });
+      }
 
       if (!response.ok) {
         throw new Error(`Jupiter API returned ${response.status}: ${response.statusText}`);
@@ -178,46 +180,55 @@ export class SolanaTokenScanner {
       return filtered.map(token => this.transformJupiterToken(token));
 
     } catch (error) {
-      console.error('Jupiter API error:', error);
+      console.error('Jupiter API error:', error instanceof Error ? error.message : 'Unknown error');
       throw error;
     }
   }
 
   /**
-   * Fetch from DexScreener API
-   * Best for: Low market cap tokens, pump.fun launches, newly created tokens
+   * Fetch from DexScreener API with rate limit protection
    */
   private async fetchFromDexScreener(): Promise<Token[]> {
     try {
       console.log('Fetching from DexScreener API...');
       
-      // Search for each term separately to maximize results
-      const searchPromises = SEARCH_TERMS.map(async (term) => {
+      const allPairs: DexScreenerPair[] = [];
+      
+      // Search terms with delays to avoid rate limiting
+      for (const term of SEARCH_TERMS) {
         try {
           const url = `${DEXSCREENER_SEARCH_API}?q=${encodeURIComponent(term)}`;
           const response = await fetch(url, {
             headers: {
               'Accept': 'application/json',
+              'User-Agent': 'Mozilla/5.0',
             },
+            signal: AbortSignal.timeout(8000), // 8 second timeout
           });
 
-          if (!response.ok) {
-            console.warn(`  → DexScreener search for "${term}" returned ${response.status}`);
-            return [];
+          if (response.ok) {
+            const data: { pairs?: DexScreenerPair[] } = await response.json();
+            if (data.pairs) {
+              allPairs.push(...data.pairs);
+              console.log(`  → "${term}": ${data.pairs.length} pairs`);
+            }
+          } else if (response.status === 429) {
+            console.warn(`  → "${term}": Rate limited (429), skipping`);
+          } else {
+            console.warn(`  → "${term}": HTTP ${response.status}`);
           }
 
-          const data: { pairs?: DexScreenerPair[] } = await response.json();
-          return data.pairs || [];
+          // Small delay between requests to avoid rate limiting
+          if (term !== SEARCH_TERMS[SEARCH_TERMS.length - 1]) {
+            await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay
+          }
+
         } catch (err) {
-          console.warn(`  → DexScreener search for "${term}" failed:`, err);
-          return [];
+          console.warn(`  → "${term}": ${err instanceof Error ? err.message : 'Failed'}`);
         }
-      });
+      }
 
-      const results = await Promise.all(searchPromises);
-      const allPairs = results.flat();
-
-      console.log(`  → Fetched ${allPairs.length} total pairs from DexScreener`);
+      console.log(`  → Total pairs fetched: ${allPairs.length}`);
 
       // Filter for Solana only and tokens matching our search
       const solanaPairs = allPairs.filter(pair => 
@@ -245,14 +256,13 @@ export class SolanaTokenScanner {
       return tokens;
 
     } catch (error) {
-      console.error('DexScreener API error:', error);
+      console.error('DexScreener API error:', error instanceof Error ? error.message : 'Unknown error');
       throw error;
     }
   }
 
   /**
    * Fetch from Birdeye API (if API key is available)
-   * Best for: Comprehensive token list with market data and filtering
    */
   private async fetchFromBirdeye(): Promise<Token[]> {
     if (!this.BIRDEYE_API_KEY) {
@@ -265,7 +275,6 @@ export class SolanaTokenScanner {
     try {
       console.log('Fetching from Birdeye API...');
       
-      // Fetch token list sorted by market cap (ascending to get low mcap tokens)
       const response = await fetch(
         `${BIRDEYE_TOKEN_LIST_API}?sort_by=mc&sort_type=asc&limit=1000`,
         {
@@ -274,6 +283,7 @@ export class SolanaTokenScanner {
             'x-chain': 'solana',
             'Accept': 'application/json',
           },
+          signal: AbortSignal.timeout(10000),
         }
       );
 
@@ -286,7 +296,6 @@ export class SolanaTokenScanner {
       
       console.log(`  → Fetched ${allTokens.length} total tokens from Birdeye`);
 
-      // Filter for tokens containing search terms
       const filtered = allTokens.filter(token =>
         this.containsSearchTerm(token.name, SEARCH_TERMS) ||
         this.containsSearchTerm(token.symbol, SEARCH_TERMS)
@@ -295,14 +304,11 @@ export class SolanaTokenScanner {
       return filtered.map(token => this.transformBirdeyeToken(token));
 
     } catch (error) {
-      console.error('Birdeye API error:', error);
+      console.error('Birdeye API error:', error instanceof Error ? error.message : 'Unknown error');
       throw error;
     }
   }
 
-  /**
-   * Transform Jupiter token to our schema
-   */
   private transformJupiterToken(jupToken: JupiterToken): Token {
     const socials: Token['socials'] = {};
 
@@ -330,63 +336,43 @@ export class SolanaTokenScanner {
     };
   }
 
-  /**
-   * Transform DexScreener token to our schema
-   */
   private transformDexScreenerToken(pair: DexScreenerPair): Token {
     return {
       name: pair.baseToken.name,
       symbol: pair.baseToken.symbol,
       mintAddress: pair.baseToken.address,
-      decimals: 9, // DexScreener doesn't provide decimals, default to 9 (most common for SPL tokens)
-      socials: undefined, // DexScreener doesn't provide social links in search results
+      decimals: 9,
+      socials: undefined,
     };
   }
 
-  /**
-   * Transform Birdeye token to our schema
-   */
   private transformBirdeyeToken(token: BirdeyeToken): Token {
     return {
       name: token.name,
       symbol: token.symbol,
       mintAddress: token.address,
-      decimals: token.decimals || 9, // Default to 9 if not provided
-      socials: undefined, // Birdeye token list doesn't include social links
+      decimals: token.decimals || 9,
+      socials: undefined,
     };
   }
 
-  /**
-   * Check if text contains any of the search terms (case-insensitive)
-   */
   private containsSearchTerm(text: string, searchTerms: string[]): boolean {
     if (!text) return false;
     const lowerText = text.toLowerCase();
     return searchTerms.some(term => lowerText.includes(term.toLowerCase()));
   }
 
-  /**
-   * Normalize various URL formats to full URLs
-   */
   private normalizeUrl(url: string): string {
     if (!url) return url;
-
-    // Handle Twitter handles (e.g., "@username")
     if (url.startsWith('@')) {
       return `https://twitter.com/${url.slice(1)}`;
     }
-
-    // Ensure proper protocol
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       return `https://${url}`;
     }
-
     return url;
   }
 
-  /**
-   * Demo tokens for development/testing when APIs are unavailable
-   */
   private getDemoTokens(): Token[] {
     return [
       {
