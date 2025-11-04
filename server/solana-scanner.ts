@@ -3,7 +3,7 @@ import type { Token } from '@shared/schema';
 
 const JUPITER_TOKEN_API = 'https://tokens.jup.ag/tokens';
 const DEXSCREENER_SEARCH_API = 'https://api.dexscreener.com/latest/dex/search';
-const SEARCH_TERMS = ['402', 'x402', '402x'];
+const SEARCH_TERMS = ['402', 'x402']; // Two terms with delay between them
 
 interface JupiterToken {
   address: string;
@@ -32,15 +32,6 @@ interface DexScreenerPair {
   volume?: { h24: number };
   dexId?: string;
   pairCreatedAt?: number;
-  info?: {
-    socials?: Array<{
-      type: string;
-      url: string;
-    }>;
-    websites?: Array<{
-      url: string;
-    }>;
-  };
 }
 
 export class SolanaTokenScanner {
@@ -65,7 +56,7 @@ export class SolanaTokenScanner {
         this.fetchFromDexScreener(),
       ]);
 
-      // Start with DexScreener (primary source - has socials!)
+      // Start with DexScreener (primary source)
       const tokensMap = new Map<string, Token>();
 
       if (dexScreenerResult.status === 'fulfilled') {
@@ -75,29 +66,26 @@ export class SolanaTokenScanner {
         console.log(`✓ DexScreener: ${dexScreenerResult.value.length} tokens (PRIMARY)`);
       } else {
         console.error('✗ DexScreener failed:', dexScreenerResult.reason?.message);
+        // If DexScreener fails, we have no tokens
         return this.tokensCache.length > 0 ? this.tokensCache : [];
       }
 
-      // Enhance with Jupiter social links if available (usually won't work on Render)
+      // Enhance with Jupiter social links if available
       if (jupiterResult.status === 'fulfilled') {
         let enhancedCount = 0;
         jupiterResult.value.forEach(token => {
           const key = token.mintAddress.toLowerCase();
           const existing = tokensMap.get(key);
           
-          if (existing) {
-            // Merge socials: prefer Jupiter's if available, keep DexScreener's as fallback
-            existing.socials = {
-              ...existing.socials,
-              ...token.socials,
-            };
-            existing.decimals = token.decimals;
+          if (existing && token.socials) {
+            existing.socials = token.socials;
+            existing.decimals = token.decimals; // Jupiter has accurate decimals
             enhancedCount++;
           }
         });
-        console.log(`✓ Jupiter: Enhanced ${enhancedCount} tokens with additional social links`);
+        console.log(`✓ Jupiter: Enhanced ${enhancedCount} tokens with social links`);
       } else {
-        console.warn('⚠ Jupiter unavailable - using DexScreener social links only');
+        console.warn('⚠ Jupiter unavailable (network blocked) - tokens will show without social links');
       }
 
       this.tokensCache = Array.from(tokensMap.values());
@@ -155,6 +143,7 @@ export class SolanaTokenScanner {
       
       const allPairs: DexScreenerPair[] = [];
       
+      // Search multiple terms with delay between each
       for (let i = 0; i < SEARCH_TERMS.length; i++) {
         const term = SEARCH_TERMS[i];
         
@@ -180,8 +169,9 @@ export class SolanaTokenScanner {
             console.warn(`  → "${term}": HTTP ${response.status}`);
           }
 
+          // Delay between searches to avoid rate limiting (skip delay on last term)
           if (i < SEARCH_TERMS.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 1500));
+            await new Promise(resolve => setTimeout(resolve, 1500)); // 1.5 second delay
           }
 
         } catch (err) {
@@ -191,12 +181,14 @@ export class SolanaTokenScanner {
 
       console.log(`  → Total pairs fetched: ${allPairs.length}`);
 
+      // Filter for Solana and matching tokens
       const solanaPairs = allPairs.filter(pair => 
         pair.chainId === 'solana' &&
         pair.baseToken &&
         (this.contains402(pair.baseToken.name) || this.contains402(pair.baseToken.symbol))
       );
 
+      // Deduplicate by token address
       const tokenMap = new Map<string, DexScreenerPair>();
       solanaPairs.forEach(pair => {
         const key = pair.baseToken.address.toLowerCase();
@@ -253,32 +245,12 @@ export class SolanaTokenScanner {
   }
 
   private transformDexScreenerToken(pair: DexScreenerPair): Token {
-    // Extract social links from DexScreener data
-    const socials: Token['socials'] = {};
-
-    if (pair.info?.socials) {
-      pair.info.socials.forEach(social => {
-        const type = social.type.toLowerCase();
-        if (type === 'twitter') {
-          socials.twitter = social.url;
-        } else if (type === 'telegram') {
-          socials.telegram = social.url;
-        } else if (type === 'discord') {
-          socials.discord = social.url;
-        }
-      });
-    }
-
-    if (pair.info?.websites && pair.info.websites.length > 0) {
-      socials.website = pair.info.websites[0].url;
-    }
-
     return {
       name: pair.baseToken.name,
       symbol: pair.baseToken.symbol,
       mintAddress: pair.baseToken.address,
       decimals: 9,
-      socials: Object.keys(socials).length > 0 ? socials : undefined,
+      socials: undefined,
     };
   }
 
