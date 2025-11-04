@@ -2,7 +2,6 @@ import { fetch } from 'undici';
 import type { Token } from '@shared/schema';
 
 const DEXSCREENER_SEARCH_API = 'https://api.dexscreener.com/latest/dex/search';
-const PUMPPORTAL_TOKENS_API = 'https://pumpportal.fun/api/data/tokens';
 const SEARCH_TERMS = ['402', 'x402', '402x'];
 
 interface DexScreenerPair {
@@ -30,19 +29,6 @@ interface DexScreenerPair {
   };
 }
 
-interface PumpFunToken {
-  mint: string;
-  name: string;
-  symbol: string;
-  description?: string;
-  image?: string;
-  twitter?: string;
-  telegram?: string;
-  website?: string;
-  creator?: string;
-  marketCap?: number;
-}
-
 export class SolanaTokenScanner {
   private tokensCache: Token[] = [];
   private lastFetchTime: number = 0;
@@ -59,49 +45,10 @@ export class SolanaTokenScanner {
     try {
       console.log('=== Starting token scan ===');
       
-      // Fetch from all sources in parallel
-      const [dexScreenerResult, pumpFunResult] = await Promise.allSettled([
-        this.fetchFromDexScreener(),
-        this.fetchFromPumpFun(),
-      ]);
-
-      const tokensMap = new Map<string, Token>();
-
-      // Process DexScreener tokens (primary)
-      if (dexScreenerResult.status === 'fulfilled') {
-        dexScreenerResult.value.forEach(token => {
-          tokensMap.set(token.mintAddress.toLowerCase(), token);
-        });
-        console.log(`✓ DexScreener: ${dexScreenerResult.value.length} tokens`);
-      } else {
-        console.error('✗ DexScreener failed:', dexScreenerResult.reason?.message);
-      }
-
-      // Enhance with Pump.fun social links
-      if (pumpFunResult.status === 'fulfilled') {
-        let enhancedCount = 0;
-        pumpFunResult.value.forEach(token => {
-          const key = token.mintAddress.toLowerCase();
-          const existing = tokensMap.get(key);
-          
-          if (existing && token.socials) {
-            // Merge socials
-            existing.socials = {
-              ...existing.socials,
-              ...token.socials,
-            };
-            enhancedCount++;
-          } else if (!existing) {
-            // New token from Pump.fun
-            tokensMap.set(key, token);
-          }
-        });
-        console.log(`✓ Pump.fun: ${pumpFunResult.value.length} tokens (enhanced ${enhancedCount} with social links)`);
-      } else {
-        console.warn('⚠ Pump.fun unavailable');
-      }
-
-      this.tokensCache = Array.from(tokensMap.values());
+      // Only fetch from DexScreener for now (stable and working)
+      const tokens = await this.fetchFromDexScreener();
+      
+      this.tokensCache = tokens;
       this.lastFetchTime = now;
 
       console.log(`=== Total tokens: ${this.tokensCache.length} ===`);
@@ -159,6 +106,8 @@ export class SolanaTokenScanner {
         }
       }
 
+      console.log(`  → Total pairs fetched: ${allPairs.length}`);
+
       const solanaPairs = allPairs.filter(pair => 
         pair.chainId === 'solana' &&
         pair.baseToken &&
@@ -185,42 +134,6 @@ export class SolanaTokenScanner {
     }
   }
 
-  private async fetchFromPumpFun(): Promise<Token[]> {
-    try {
-      console.log('Fetching from Pump.fun API...');
-      
-      // PumpPortal provides a list of all recent tokens
-      // We'll filter for 402 tokens
-      const response = await fetch(PUMPPORTAL_TOKENS_API, {
-        headers: {
-          'Accept': 'application/json',
-          'User-Agent': 'Mozilla/5.0',
-        },
-        signal: AbortSignal.timeout(15000),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const data = await response.json();
-      const allTokens: PumpFunToken[] = Array.isArray(data) ? data : [];
-      
-      console.log(`  → Fetched ${allTokens.length} tokens from Pump.fun`);
-
-      // Filter for 402 tokens
-      const filtered = allTokens.filter(token =>
-        this.contains402(token.name) || this.contains402(token.symbol)
-      );
-
-      return filtered.map(token => this.transformPumpFunToken(token));
-
-    } catch (error) {
-      console.error('Pump.fun API error:', error instanceof Error ? error.message : 'Unknown');
-      throw error;
-    }
-  }
-
   private contains402(text: string): boolean {
     if (!text) return false;
     const lowerText = text.toLowerCase();
@@ -235,7 +148,7 @@ export class SolanaTokenScanner {
     if (pair.info?.socials) {
       pair.info.socials.forEach(social => {
         const type = social.type.toLowerCase();
-        if (type === 'twitter') {
+        if (type === 'twitter' || type === 'x') {
           socials.twitter = social.url;
         } else if (type === 'telegram') {
           socials.telegram = social.url;
@@ -253,28 +166,6 @@ export class SolanaTokenScanner {
       name: pair.baseToken.name,
       symbol: pair.baseToken.symbol,
       mintAddress: pair.baseToken.address,
-      decimals: 9,
-      socials: Object.keys(socials).length > 0 ? socials : undefined,
-    };
-  }
-
-  private transformPumpFunToken(token: PumpFunToken): Token {
-    const socials: Token['socials'] = {};
-
-    if (token.twitter) {
-      socials.twitter = this.normalizeUrl(token.twitter);
-    }
-    if (token.telegram) {
-      socials.telegram = this.normalizeUrl(token.telegram);
-    }
-    if (token.website) {
-      socials.website = this.normalizeUrl(token.website);
-    }
-
-    return {
-      name: token.name,
-      symbol: token.symbol,
-      mintAddress: token.mint,
       decimals: 9,
       socials: Object.keys(socials).length > 0 ? socials : undefined,
     };
